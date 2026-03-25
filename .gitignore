@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Database
+signals.db
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code session files
+.claude/
