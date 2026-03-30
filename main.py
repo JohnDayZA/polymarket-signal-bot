@@ -19,6 +19,7 @@ import argparse
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
@@ -111,6 +112,20 @@ def run(max_markets: int | None, dry_run: bool) -> None:
         category = mkt["category"]
         price = mkt["market_price"]
 
+        # Calculate days until resolution from end_date
+        days_to_resolution: float | None = None
+        end_date_raw = mkt.get("end_date")
+        if end_date_raw:
+            try:
+                end_raw = str(end_date_raw).rstrip("Z")
+                if "T" in end_raw:
+                    end_dt = datetime.fromisoformat(end_raw).replace(tzinfo=timezone.utc)
+                else:
+                    end_dt = datetime.fromisoformat(end_raw + "T23:59:59").replace(tzinfo=timezone.utc)
+                days_to_resolution = (end_dt - datetime.now(timezone.utc)).total_seconds() / 86400
+            except (ValueError, TypeError):
+                pass
+
         logger.info(
             "[%d/%d] %s | price=%.3f | %s",
             i, len(markets),
@@ -151,6 +166,7 @@ def run(max_markets: int | None, dry_run: bool) -> None:
                 vix=snapshot["vix"],
                 fear_greed_value=snapshot["fear_greed_value"],
                 fear_greed_label=snapshot["fear_greed_label"],
+                days_to_resolution=days_to_resolution,
             )
 
         processed += 1

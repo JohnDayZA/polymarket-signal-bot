@@ -262,6 +262,7 @@ def fetch_target_markets() -> list[dict]:
 
             tags_raw = m.get("tags") or []
             category = _category_from_tags(tags_raw) or tag.capitalize()
+            end_date = m.get("endDate") or m.get("end_date_iso") or m.get("endDateIso")
 
             results.append(
                 {
@@ -269,6 +270,7 @@ def fetch_target_markets() -> list[dict]:
                     "question": question,
                     "category": category,
                     "market_price": price,
+                    "end_date": end_date,
                 }
             )
 
@@ -300,6 +302,7 @@ def fetch_target_markets() -> list[dict]:
                     "question": m.get("question", ""),
                     "category": _category_from_tags(tags_raw),
                     "market_price": _best_yes_price(m),
+                    "end_date": m.get("end_date_iso") or m.get("endDate") or m.get("endDateIso"),
                 }
             )
 

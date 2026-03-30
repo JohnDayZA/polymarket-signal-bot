@@ -35,6 +35,7 @@ def init_db() -> None:
                 vix             REAL,
                 fear_greed_value    INTEGER,
                 fear_greed_label    TEXT,
+                days_to_resolution  REAL,       -- days between signal timestamp and market end date
                 resolved_value      REAL,       -- 1.0 = YES, 0.0 = NO, NULL = unresolved
                 resolved_at         TEXT,       -- UTC ISO timestamp of resolution fetch
                 was_claude_correct  INTEGER     -- 1 = correct, 0 = incorrect, NULL = unresolved
@@ -52,6 +53,7 @@ def init_db() -> None:
         # Migrate existing tables that pre-date the resolution columns
         existing = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
         for col, typedef in [
+            ("days_to_resolution", "REAL"),
             ("resolved_value",     "REAL"),
             ("resolved_at",        "TEXT"),
             ("was_claude_correct", "INTEGER"),
@@ -71,6 +73,7 @@ def log_signal(
     vix: float | None,
     fear_greed_value: int | None,
     fear_greed_label: str | None,
+    days_to_resolution: float | None = None,
 ) -> int:
     """Insert one signal row. Returns the new row id."""
     ts = datetime.now(timezone.utc).isoformat()
@@ -80,13 +83,13 @@ def log_signal(
             INSERT INTO signals
               (timestamp, market_id, question, category, market_price,
                claude_prob, confidence, reasoning, vix,
-               fear_greed_value, fear_greed_label)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               fear_greed_value, fear_greed_label, days_to_resolution)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 ts, market_id, question, category, market_price,
                 claude_prob, confidence, reasoning, vix,
-                fear_greed_value, fear_greed_label,
+                fear_greed_value, fear_greed_label, days_to_resolution,
             ),
         )
         return cur.lastrowid
