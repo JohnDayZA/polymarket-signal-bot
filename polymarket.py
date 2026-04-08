@@ -75,10 +75,12 @@ def _get_all_markets_clob() -> list[dict]:
     return markets
 
 
-def _get_gamma_markets_by_tag(tag: str) -> list[dict]:
+def _get_gamma_markets() -> list[dict]:
     """
-    Use the Gamma Markets API to fetch markets by tag/category.
-    Returns raw market dicts including condition_id and question.
+    Fetch active markets from the Gamma API sorted by 24-hour volume descending.
+    No tag filter is applied — the Gamma tag parameter does not reliably filter
+    by category (it returns the same popular markets regardless of tag value).
+    Keyword classification in _category_from_question() handles categorisation.
     """
     markets: list[dict] = []
     offset = 0
@@ -88,7 +90,8 @@ def _get_gamma_markets_by_tag(tag: str) -> list[dict]:
         params = {
             "active": "true",
             "closed": "false",
-            "tag": tag,
+            "order": "volume24hr",
+            "ascending": "false",
             "limit": PAGE_SIZE,
             "offset": offset,
         }
@@ -97,7 +100,7 @@ def _get_gamma_markets_by_tag(tag: str) -> list[dict]:
             resp.raise_for_status()
             batch = resp.json()
         except Exception as exc:
-            logger.error("Gamma /markets tag=%s request failed: %s", tag, exc)
+            logger.error("Gamma /markets request failed: %s", exc)
             break
 
         if not batch:
@@ -105,7 +108,7 @@ def _get_gamma_markets_by_tag(tag: str) -> list[dict]:
 
         markets.extend(batch)
         page += 1
-        logger.info("Gamma tag=%-10s page %d/%d: got %d markets (total: %d)", tag, page, MAX_PAGES, len(batch), len(markets))
+        logger.info("Gamma page %d/%d: got %d markets (total: %d)", page, MAX_PAGES, len(batch), len(markets))
 
         if len(batch) < PAGE_SIZE:
             break
@@ -314,15 +317,16 @@ def _category_from_question(question: str) -> str:
 
 def fetch_target_markets() -> list[dict]:
     """
-    Return a deduplicated list of active Politics and Crypto markets.
+    Return a deduplicated list of active markets across all categories.
 
     Each item is a dict with:
         market_id   : str  (condition_id / CLOB market id)
         question    : str
-        category    : str  ("Politics", "Crypto", or "Politics/Crypto")
+        category    : str  (Politics/Election, Politics, Crypto/Price, Crypto, Tech, Sports, Other)
         market_price: float | None  (best YES price, 0-1)
     """
-    # Strategy: pull from Gamma (has tag metadata) then match prices from CLOB
+    # Strategy: pull top-volume markets from Gamma (no tag filter — the tag
+    # parameter is unreliable) then classify by question keyword matching.
     seen_ids: set[str] = set()
     results: list[dict] = []
 
@@ -331,60 +335,59 @@ def fetch_target_markets() -> list[dict]:
     blocklisted_count = 0
     stale_coinflip_count = 0
 
-    for tag in ("politics", "crypto"):
-        raw = _get_gamma_markets_by_tag(tag)
-        for m in raw:
-            cid = m.get("conditionId") or m.get("condition_id") or m.get("id", "")
-            if not cid or cid in seen_ids:
-                continue
+    raw = _get_gamma_markets()
+    for m in raw:
+        cid = m.get("conditionId") or m.get("condition_id") or m.get("id", "")
+        if not cid or cid in seen_ids:
+            continue
 
-            if _is_expired_or_imminent(m):
-                expired_count += 1
-                continue
+        if _is_expired_or_imminent(m):
+            expired_count += 1
+            continue
 
-            if not _has_sufficient_volume(m):
-                low_volume_count += 1
-                continue
+        if not _has_sufficient_volume(m):
+            low_volume_count += 1
+            continue
 
-            question = m.get("question", "")
-            if _is_blocklisted(question):
-                blocklisted_count += 1
-                continue
+        question = m.get("question", "")
+        if _is_blocklisted(question):
+            blocklisted_count += 1
+            continue
 
-            # Parse price before stale-coinflip check (needs the value)
-            price: float | None = None
-            outcomes_prices_raw = m.get("outcomePrices")
-            try:
-                if outcomes_prices_raw:
-                    if isinstance(outcomes_prices_raw, str):
-                        outcomes_prices_raw = json.loads(outcomes_prices_raw)
-                    price = float(outcomes_prices_raw[0])
-            except (TypeError, ValueError, IndexError):
-                price = None
+        # Parse price before stale-coinflip check (needs the value)
+        price: float | None = None
+        outcomes_prices_raw = m.get("outcomePrices")
+        try:
+            if outcomes_prices_raw:
+                if isinstance(outcomes_prices_raw, str):
+                    outcomes_prices_raw = json.loads(outcomes_prices_raw)
+                price = float(outcomes_prices_raw[0])
+        except (TypeError, ValueError, IndexError):
+            price = None
 
-            if _is_stale_coinflip(m, price):
-                stale_coinflip_count += 1
-                continue
+        if _is_stale_coinflip(m, price):
+            stale_coinflip_count += 1
+            continue
 
-            seen_ids.add(cid)
+        seen_ids.add(cid)
 
-            tags_raw = m.get("tags") or []
-            category = _category_from_tags(tags_raw)
-            if category == "Other":
-                # Gamma doesn't return tag metadata in responses; classify by
-                # question text so Sports/Other markets aren't mislabelled.
-                category = _category_from_question(question)
-            end_date = m.get("endDate") or m.get("end_date_iso") or m.get("endDateIso")
+        tags_raw = m.get("tags") or []
+        category = _category_from_tags(tags_raw)
+        if category == "Other":
+            # Gamma doesn't return tag metadata in responses; classify by
+            # question text so Sports/Other markets aren't mislabelled.
+            category = _category_from_question(question)
+        end_date = m.get("endDate") or m.get("end_date_iso") or m.get("endDateIso")
 
-            results.append(
-                {
-                    "market_id": cid,
-                    "question": question,
-                    "category": category,
-                    "market_price": price,
-                    "end_date": end_date,
-                }
-            )
+        results.append(
+            {
+                "market_id": cid,
+                "question": question,
+                "category": category,
+                "market_price": price,
+                "end_date": end_date,
+            }
+        )
 
     logger.info(
         "Filtered out: %d expired/imminent (<%dd), %d low-volume (<$%.0f), %d blocklisted, %d stale coin-flips (<$%.0f vol @ 45-55%%)",
