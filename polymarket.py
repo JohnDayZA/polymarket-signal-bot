@@ -204,6 +204,112 @@ def _category_from_tags(tags: list) -> str:
     return "/".join(sorted(labels)) if labels else "Other"
 
 
+import re as _re
+
+
+def _wbp(kw: str) -> str:
+    """
+    Build a word-boundary-aware regex pattern for a keyword.
+    Adds \\b only on sides that are alphabetic so that special-char prefixes
+    like '$' and multi-word phrases work correctly without false boundaries.
+    """
+    esc = _re.escape(kw)
+    prefix = r"\b" if kw[0].isalpha() else ""
+    suffix = r"\b" if kw[-1].isalpha() else ""
+    return prefix + esc + suffix
+
+
+def _any_kw(keywords: set, text: str) -> bool:
+    return any(_re.search(_wbp(kw), text) is not None for kw in keywords)
+
+
+# ---------------------------------------------------------------------------
+# Category keyword sets (checked in priority order inside _category_from_question)
+# ---------------------------------------------------------------------------
+
+# 1 & 2 — Crypto sub-categories (both require a base crypto keyword match first)
+_CRYPTO_BASE: set[str] = {
+    "bitcoin", "btc", "ethereum", "eth", "crypto", "cryptocurrency",
+    "solana", "coinbase", "binance", "defi", "nft", "blockchain",
+    "doge", "dogecoin", "xrp", "ripple", "litecoin", "ltc",
+    "cardano", "matic", "polygon", "avax", "uniswap", "chainlink",
+    "stablecoin", "altcoin", "memecoin", "token", "dao", "web3",
+}
+
+_CRYPTO_PRICE: set[str] = {
+    "price", "hits", "reaches", "above", "below", "market cap", "ath",
+    "all-time high", "trading at", "valuation", "dominance",
+    "$100k", "$50k", "$1m",
+}
+
+_CRYPTO_REGULATION: set[str] = {
+    "sec", "cftc", "etf", "approved", "banned", "regulated",
+    "lawsuit", "legislation",
+}
+
+# 4 & 5 — Politics sub-categories
+_POLITICS_ELECTION: set[str] = {
+    "election", "ballot", "candidate", "primary", "nomination",
+    "midterm", "polling", "poll",
+}
+
+_POLITICS_BASE: set[str] = {
+    "president", "senate", "senator", "congress", "vote",
+    "trump", "biden", "harris", "democrat", "democratic", "republican",
+    "parliament", "legislation", "ceasefire", "nato", "sanction", "tariff",
+    "minister", "chancellor", "government", "political", "treaty", "policy",
+    "referendum", "campaign", "inauguration",
+}
+
+# 6 — Sports
+_SPORTS: set[str] = {
+    "nfl", "nba", "nhl", "mlb", "fifa", "world cup", "champions league",
+    "super bowl", "stanley cup", "playoffs", "playoff", "championship",
+    "qualifier", "qualify", "tournament", "final", "finals", "semifinal",
+    "grand prix", "formula 1", "f1", "ufc", "boxing", "tennis", "golf",
+    "olympic", "wimbledon", "league", "season", "match", "score", "roster",
+}
+
+# 7 — Tech / AI
+_TECH: set[str] = {
+    "google", "microsoft", "apple", "meta", "amazon", "openai", "anthropic",
+    "deepmind", "gemini", "gpt", "claude", "llm", "artificial intelligence",
+    "machine learning", "benchmark", "nvidia", "tesla", "spacex", "starship",
+    "neuralink", "iphone", "android", "semiconductor", "data center", "cloud",
+}
+
+
+def _category_from_question(question: str) -> str:
+    """
+    Classify a market question into a category using whole-word keyword matching.
+    Categories are checked in priority order from most specific to most general:
+      Crypto/Price > Crypto/Regulation > Crypto >
+      Politics/Election > Politics > Sports > Tech > Other
+    """
+    q = question.lower()
+
+    if _any_kw(_CRYPTO_BASE, q):
+        if _any_kw(_CRYPTO_PRICE, q):
+            return "Crypto/Price"
+        if _any_kw(_CRYPTO_REGULATION, q):
+            return "Crypto/Regulation"
+        return "Crypto"
+
+    is_politics = _any_kw(_POLITICS_BASE, q) or _any_kw(_POLITICS_ELECTION, q)
+    if is_politics:
+        if _any_kw(_POLITICS_ELECTION, q):
+            return "Politics/Election"
+        return "Politics"
+
+    if _any_kw(_SPORTS, q):
+        return "Sports"
+
+    if _any_kw(_TECH, q):
+        return "Tech"
+
+    return "Other"
+
+
 def fetch_target_markets() -> list[dict]:
     """
     Return a deduplicated list of active Politics and Crypto markets.
@@ -261,7 +367,11 @@ def fetch_target_markets() -> list[dict]:
             seen_ids.add(cid)
 
             tags_raw = m.get("tags") or []
-            category = _category_from_tags(tags_raw) or tag.capitalize()
+            category = _category_from_tags(tags_raw)
+            if category == "Other":
+                # Gamma doesn't return tag metadata in responses; classify by
+                # question text so Sports/Other markets aren't mislabelled.
+                category = _category_from_question(question)
             end_date = m.get("endDate") or m.get("end_date_iso") or m.get("endDateIso")
 
             results.append(
@@ -296,11 +406,14 @@ def fetch_target_markets() -> list[dict]:
             if not cid or cid in seen_ids:
                 continue
             seen_ids.add(cid)
+            category = _category_from_tags(tags_raw)
+            if category == "Other":
+                category = _category_from_question(m.get("question", ""))
             results.append(
                 {
                     "market_id": cid,
                     "question": m.get("question", ""),
-                    "category": _category_from_tags(tags_raw),
+                    "category": category,
                     "market_price": _best_yes_price(m),
                     "end_date": m.get("end_date_iso") or m.get("endDate") or m.get("endDateIso"),
                 }
