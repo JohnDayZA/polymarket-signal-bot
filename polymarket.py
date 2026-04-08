@@ -234,6 +234,7 @@ _CRYPTO_BASE: set[str] = {
     "doge", "dogecoin", "xrp", "ripple", "litecoin", "ltc",
     "cardano", "matic", "polygon", "avax", "uniswap", "chainlink",
     "stablecoin", "altcoin", "memecoin", "token", "dao", "web3",
+    "megaeth",
 }
 
 _CRYPTO_PRICE: set[str] = {
@@ -259,6 +260,7 @@ _POLITICS_BASE: set[str] = {
     "parliament", "legislation", "ceasefire", "nato", "sanction", "tariff",
     "minister", "chancellor", "government", "political", "treaty", "policy",
     "referendum", "campaign", "inauguration",
+    "xi jinping", "jinping",
 }
 
 # 6 — Sports
