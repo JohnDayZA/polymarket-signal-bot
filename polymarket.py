@@ -264,6 +264,9 @@ _POLITICS_BASE: set[str] = {
     "minister", "chancellor", "government", "political", "treaty", "policy",
     "referendum", "campaign", "inauguration",
     "xi jinping", "jinping",
+    "iran", "iranian", "israel", "israeli", "netanyahu", "taiwan",
+    "ukraine", "zelensky", "invade", "invasion", "missile", "airstrike",
+    "nuclear", "hezbollah", "hamas", "putin", "kremlin",
 }
 
 # 6 — Sports
@@ -281,6 +284,21 @@ _TECH: set[str] = {
     "deepmind", "gemini", "gpt", "claude", "llm", "artificial intelligence",
     "machine learning", "benchmark", "nvidia", "tesla", "spacex", "starship",
     "neuralink", "iphone", "android", "semiconductor", "data center", "cloud",
+    "z.ai",
+}
+
+# 8 — Finance / Macro
+_FINANCE: set[str] = {
+    "fed", "federal reserve", "interest rate", "rate cut", "rate hike",
+    "bps", "basis points", "inflation", "cpi", "gdp", "recession",
+    "unemployment", "jerome powell", "yellen", "treasury", "yield curve",
+    "nasdaq", "dow jones", "ftse",
+}
+
+# 9 — Commodities
+_COMMODITIES: set[str] = {
+    "crude oil", "wti", "brent", "oil price", "natural gas", "gold price",
+    "silver price", "opec", "aramco", "barrel", "kharg", "hormuz",
 }
 
 
@@ -289,7 +307,7 @@ def _category_from_question(question: str) -> str:
     Classify a market question into a category using whole-word keyword matching.
     Categories are checked in priority order from most specific to most general:
       Crypto/Price > Crypto/Regulation > Crypto >
-      Politics/Election > Politics > Sports > Tech > Other
+      Politics/Election > Politics > Finance > Commodities > Sports > Tech > Other
     """
     q = question.lower()
 
@@ -305,6 +323,12 @@ def _category_from_question(question: str) -> str:
         if _any_kw(_POLITICS_ELECTION, q):
             return "Politics/Election"
         return "Politics"
+
+    if _any_kw(_FINANCE, q):
+        return "Finance"
+
+    if _any_kw(_COMMODITIES, q):
+        return "Commodities"
 
     if _any_kw(_SPORTS, q):
         return "Sports"
@@ -322,7 +346,7 @@ def fetch_target_markets() -> list[dict]:
     Each item is a dict with:
         market_id   : str  (condition_id / CLOB market id)
         question    : str
-        category    : str  (Politics/Election, Politics, Crypto/Price, Crypto, Tech, Sports, Other)
+        category    : str  (Politics/Election, Politics, Crypto/Price, Crypto/Regulation, Crypto, Finance, Commodities, Tech, Sports, Other)
         market_price: float | None  (best YES price, 0-1)
     """
     # Strategy: pull top-volume markets from Gamma (no tag filter — the tag
