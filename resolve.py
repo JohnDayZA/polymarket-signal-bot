@@ -2,22 +2,22 @@
 Resolution tracker for Polymarket signals.
 
 For every unique market_id in signals.db that is still unresolved,
-fetches the current market state from the Gamma API and writes back:
+fetches the current market state from the CLOB API and writes back:
   - resolved_value      (1.0 = YES, 0.0 = NO)
   - resolved_at         (UTC ISO timestamp)
   - was_claude_correct  (1 if Claude's direction matched outcome, else 0)
 
 A market is considered resolved when:
   - closed = true  AND
-  - outcomePrices is ["1", "0"] (YES wins) or ["0", "1"] (NO wins)
+  - one token has winner = true  (YES → 1.0, NO → 0.0)
 
 Run daily:
-    python resolve.py
-    python resolve.py --dry-run   # print without writing
+    python resolve.py                    # process up to 200 markets
+    python resolve.py --limit 500        # process up to 500 markets
+    python resolve.py --dry-run          # print without writing to DB
 """
 
 import argparse
-import json
 import logging
 import sys
 from datetime import datetime, timezone
@@ -40,60 +40,56 @@ logging.basicConfig(
 )
 logger = logging.getLogger("resolve")
 
-GAMMA_BASE = "https://gamma-api.polymarket.com"
-REQUEST_TIMEOUT = 10
+CLOB_BASE = "https://clob.polymarket.com"
+REQUEST_TIMEOUT = (5, 10)   # (connect timeout, read timeout) in seconds
 
 
 # ---------------------------------------------------------------------------
-# Gamma API helpers
+# CLOB API helpers
 # ---------------------------------------------------------------------------
+# The market_id stored in signals.db is the CLOB condition_id (hex string).
+# The CLOB API supports direct lookup via GET /markets/{condition_id} and
+# is the authoritative source for resolution — resolved tokens have winner=true.
+# (The Gamma API uses a different internal conditionId and cannot be queried
+# by CLOB condition_id, so it is not used here.)
 
 def _fetch_market(condition_id: str) -> dict | None:
-    """Fetch a single market by conditionId from the Gamma API."""
+    """Fetch a single market by condition_id from the CLOB API."""
     try:
         resp = requests.get(
-            f"{GAMMA_BASE}/markets",
-            params={"conditionId": condition_id},
+            f"{CLOB_BASE}/markets/{condition_id}",
             timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
-        data = resp.json()
-        # Gamma returns a list; grab the first match
-        if isinstance(data, list) and data:
-            return data[0]
-        if isinstance(data, dict):
-            return data
-        return None
+        return resp.json()
     except Exception as exc:
-        logger.error("Gamma fetch failed for %s: %s", condition_id[:16], exc)
+        logger.error("CLOB fetch failed for %s: %s", condition_id[:16], exc)
         return None
 
 
 def _parse_outcome(market: dict) -> float | None:
     """
     Return 1.0 if the market resolved YES, 0.0 if NO, None if still open.
-    Uses outcomePrices: a fully-resolved YES market has prices ["1", "0"].
-    Also respects the closed flag — unresolved markets stay open.
+
+    CLOB resolution signals:
+      - closed = true (market has stopped trading)
+      - One token has winner = true
+        * outcome "Yes" winner → 1.0
+        * outcome "No"  winner → 0.0
     """
     if not market.get("closed", False):
         return None
 
-    raw = market.get("outcomePrices")
-    if not raw:
-        return None
-    try:
-        if isinstance(raw, str):
-            raw = json.loads(raw)
-        yes_price = float(raw[0])
-        no_price = float(raw[1])
-    except (ValueError, TypeError, IndexError):
-        return None
+    tokens = market.get("tokens") or []
+    for token in tokens:
+        if token.get("winner", False):
+            outcome = token.get("outcome", "").strip().lower()
+            if outcome == "yes":
+                return 1.0
+            if outcome == "no":
+                return 0.0
 
-    if yes_price == 1.0 and no_price == 0.0:
-        return 1.0
-    if yes_price == 0.0 and no_price == 1.0:
-        return 0.0
-    return None  # still trading / not fully settled
+    return None  # closed but no winner token yet (still settling)
 
 
 def _was_correct(claude_prob: float | None, resolved_value: float) -> int | None:
@@ -114,33 +110,41 @@ def _was_correct(claude_prob: float | None, resolved_value: float) -> int | None
 # Main resolution loop
 # ---------------------------------------------------------------------------
 
-def resolve(dry_run: bool = False) -> None:
+def resolve(dry_run: bool = False, limit: int = 200) -> None:
     db.init_db()
 
     with db.get_connection() as conn:
-        # Distinct markets that have no resolved_value yet and have a real condition_id
+        # One row per distinct market_id (GROUP BY deduplicates repeated signals for
+        # the same market so --limit means N unique markets, not N signal rows).
         unresolved = conn.execute("""
-            SELECT DISTINCT market_id,
-                   question,
-                   claude_prob
+            SELECT market_id,
+                   MAX(question)    AS question,
+                   MAX(claude_prob) AS claude_prob
             FROM signals
             WHERE resolved_value IS NULL
               AND market_id != ''
+            GROUP BY market_id
             ORDER BY market_id
-        """).fetchall()
+            LIMIT ?
+        """, (limit,)).fetchall()
 
     if not unresolved:
         logger.info("No unresolved markets found.")
         return
 
-    logger.info("Checking %d unresolved market(s)...", len(unresolved))
+    logger.info("Checking %d unresolved market(s) (limit=%d)...", len(unresolved), limit)
 
     resolved_count = 0
     skipped_count = 0
     error_count = 0
     now = datetime.now(timezone.utc).isoformat()
 
-    for row in unresolved:
+    for i, row in enumerate(unresolved, 1):
+        if i % 50 == 0:
+            logger.info(
+                "  Progress: %d/%d checked (%d resolved, %d open, %d errors)",
+                i, len(unresolved), resolved_count, skipped_count, error_count,
+            )
         market_id = row["market_id"]
         question = row["question"]
         claude_prob = row["claude_prob"]
@@ -196,8 +200,10 @@ def resolve(dry_run: bool = False) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Polymarket resolution tracker")
     parser.add_argument("--dry-run", action="store_true", help="Print results without writing to DB")
+    parser.add_argument("--limit", type=int, default=200, metavar="N",
+                        help="Max distinct markets to check per run (default: 200)")
     args = parser.parse_args()
-    resolve(dry_run=args.dry_run)
+    resolve(dry_run=args.dry_run, limit=args.limit)
 
 
 if __name__ == "__main__":

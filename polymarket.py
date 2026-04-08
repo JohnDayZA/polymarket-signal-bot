@@ -31,8 +31,8 @@ MIN_VOLUME_USDC = 100.0
 # milestones) are valid — Claude can reason about them. Only fictional products create
 # zombie markets with no real resolution path.
 QUESTION_BLOCKLIST = [
-    "before gta vi",  # fictional game used as a resolution backstop
-    "before gta 6",   # alternate phrasing
+    "gta vi",  # fictional game used as a resolution backstop — block any form
+    "gta 6",   # alternate phrasing
 ]
 
 # Markets priced near 50/50 with low volume are likely abandoned with no real price discovery.
