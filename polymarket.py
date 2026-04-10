@@ -275,6 +275,7 @@ _POLITICS_BASE: set[str] = {
     "iran", "iranian", "israel", "israeli", "netanyahu", "taiwan",
     "ukraine", "zelensky", "invade", "invasion", "missile", "airstrike",
     "nuclear", "hezbollah", "hamas", "putin", "kremlin",
+    "scotus", "supreme court", "weinstein", "venezuela", "uae",
 }
 
 # 6 — Sports
@@ -284,6 +285,10 @@ _SPORTS: set[str] = {
     "qualifier", "qualify", "tournament", "final", "finals", "semifinal",
     "grand prix", "formula 1", "f1", "ufc", "boxing", "tennis", "golf",
     "olympic", "wimbledon", "league", "season", "match", "score", "roster",
+    "la liga", "serie a", "bundesliga", "ligue 1", "premier league",
+    "dodgers", "yankees", "red sox", "mets", "cubs", "brewers", "astros",
+    "blue jays", "cardinals", "braves", "phillies", "giants", "rangers",
+    "conference finals", "mvp", "rookie of the year",
 }
 
 # 7 — Tech / AI
