@@ -21,7 +21,7 @@ TARGET_TAGS = {"politics", "crypto", "cryptocurrency", "political"}
 
 # Number of markets to fetch per page
 PAGE_SIZE = 100
-MAX_PAGES = 3
+MAX_PAGES = 5
 REQUEST_TIMEOUT = 10
 MIN_VOLUME_USDC = 100.0
 
