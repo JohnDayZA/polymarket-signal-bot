@@ -52,40 +52,32 @@ def _pct(v):
 
 def fetch_data(conn: sqlite3.Connection) -> list[dict]:
     conn.row_factory = sqlite3.Row
-    # For unresolved markets: filter by current (most recent) market_price.
-    # For resolved markets:   filter by entry (first) market_price — the post-
-    #                         resolution price is always near 0 or 1 and would
-    #                         otherwise exclude every resolved row.
+    # Unresolved markets: filter to the active 10-90% band (current price).
+    # Resolved markets:   no price filter — post-resolution prices are always
+    #                     near 0 or 1 and would exclude every resolved row.
+    #                     Early rows also have NULL market_price, so an entry-
+    #                     price check fails too.  Show all resolved markets.
     rows = conn.execute("""
         SELECT
-            latest.market_id,
-            latest.question,
-            latest.category,
-            latest.market_price,
-            latest.claude_prob,
-            latest.days_to_resolution,
-            latest.confidence,
-            latest.resolved_value,
-            latest.was_claude_correct,
-            latest.timestamp
-        FROM signals latest
-        -- Most recent row per market
-        WHERE latest.id IN (SELECT MAX(id) FROM signals GROUP BY market_id)
-          AND latest.claude_prob IS NOT NULL
+            s.market_id,
+            s.question,
+            s.category,
+            s.market_price,
+            s.claude_prob,
+            s.days_to_resolution,
+            s.confidence,
+            s.resolved_value,
+            s.was_claude_correct,
+            s.timestamp
+        FROM signals s
+        WHERE s.id IN (SELECT MAX(id) FROM signals GROUP BY market_id)
+          AND s.claude_prob IS NOT NULL
           AND (
-              -- Unresolved: current price must be in the active band
-              (latest.resolved_value IS NULL
-               AND latest.market_price BETWEEN ? AND ?)
-              OR
-              -- Resolved: entry price (first signal) must have been in the band
-              (latest.resolved_value IS NOT NULL
-               AND (SELECT s2.market_price
-                    FROM signals s2
-                    WHERE s2.market_id = latest.market_id
-                    ORDER BY s2.id ASC LIMIT 1) BETWEEN ? AND ?)
+              (s.resolved_value IS NULL AND s.market_price BETWEEN ? AND ?)
+              OR s.resolved_value IS NOT NULL
           )
-        ORDER BY (latest.claude_prob - latest.market_price) DESC
-    """, (MIN_PRICE, MAX_PRICE, MIN_PRICE, MAX_PRICE)).fetchall()
+        ORDER BY (s.claude_prob - s.market_price) DESC
+    """, (MIN_PRICE, MAX_PRICE)).fetchall()
     return [dict(r) for r in rows]
 
 
