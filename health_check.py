@@ -32,6 +32,10 @@ FEAR_GREED_URL = f"https://{FEAR_GREED_HOST}/v1/fgi"
 TASK_NAMES = ["PolymarketSignalBot", "PolymarketResolve"]
 REQUEST_TIMEOUT = 10
 
+# Paper trading constants
+MIN_EDGE = 0.05           # minimum claude_prob vs market_price gap to take a position
+STARTING_CAPITALS = [50.0, 500.0]
+
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
@@ -187,7 +191,160 @@ def print_db(db: dict) -> None:
         sub("Claude accuracy",   "N/A (no resolved markets yet)")
 
 # ---------------------------------------------------------------------------
-# 3. API connectivity
+# 3. Paper trading P&L simulation
+# ---------------------------------------------------------------------------
+
+def _kelly_fraction(win_prob: float, win_price: float) -> float:
+    """Full Kelly fraction for a binary outcome bet. Returns 0 if no edge."""
+    if win_price <= 0.0 or win_price >= 1.0:
+        return 0.0
+    b = (1.0 - win_price) / win_price   # net profit per dollar staked on a win
+    full_kelly = (win_prob * b - (1.0 - win_prob)) / b
+    return max(0.0, full_kelly)
+
+
+def check_paper_trading() -> dict:
+    """
+    Simulate paper trading on all resolved markets.
+    Uses the first (earliest) signal row per market for claude_prob and market_price.
+    Applies Quarter Kelly sizing; positions are taken only when edge > MIN_EDGE.
+    Bankroll is updated sequentially in resolved_at order.
+    """
+    empty = {"error": None, "trades": [], "no_edge_skipped": 0, "sims": {}}
+    if not os.path.exists(DB_PATH):
+        return {**empty, "error": f"File not found: {DB_PATH}"}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        # First signal row per market that has been resolved
+        rows = conn.execute("""
+            SELECT market_id, question, claude_prob, market_price,
+                   resolved_value, resolved_at
+            FROM signals
+            WHERE resolved_value IS NOT NULL
+              AND id IN (SELECT MIN(id) FROM signals GROUP BY market_id)
+            ORDER BY resolved_at ASC
+        """).fetchall()
+        conn.close()
+    except Exception as exc:
+        return {**empty, "error": str(exc)}
+
+    trades = []
+    skipped = 0
+    for row in rows:
+        cp = row["claude_prob"]
+        mp = row["market_price"]
+        rv = row["resolved_value"]
+        if cp is None or mp is None or rv is None:
+            skipped += 1
+            continue
+        if mp <= 0.0 or mp >= 1.0:
+            skipped += 1
+            continue
+
+        edge = cp - mp
+        if edge > MIN_EDGE:
+            direction = "YES"
+            win_prob  = cp
+            win_price = mp
+        elif edge < -MIN_EDGE:
+            direction = "NO"
+            win_prob  = 1.0 - cp
+            win_price = 1.0 - mp
+        else:
+            skipped += 1
+            continue
+
+        full_k = _kelly_fraction(win_prob, win_price)
+        quarter_k = full_k / 4.0
+        odds = (1.0 - win_price) / win_price   # net profit multiple on stake
+
+        won = (rv == 1.0) if direction == "YES" else (rv == 0.0)
+
+        trades.append({
+            "question":      row["question"],
+            "direction":     direction,
+            "claude_prob":   cp,
+            "market_price":  mp,
+            "quarter_kelly": quarter_k,
+            "odds":          odds,
+            "won":           won,
+        })
+
+    # Simulate each starting capital sequentially
+    sims = {}
+    for start in STARTING_CAPITALS:
+        bankroll     = start
+        n_positions  = 0
+        n_wins       = 0
+        largest_win  = 0.0
+        largest_loss = 0.0
+
+        for t in trades:
+            stake = t["quarter_kelly"] * bankroll
+            stake = min(stake, bankroll)
+            if stake < 0.01:
+                continue
+
+            n_positions += 1
+            if t["won"]:
+                profit = stake * t["odds"]
+                bankroll += profit
+                n_wins += 1
+                if profit > largest_win:
+                    largest_win = profit
+            else:
+                if stake > largest_loss:
+                    largest_loss = stake
+                bankroll -= stake
+
+        total_pnl = bankroll - start
+        sims[start] = {
+            "positions":    n_positions,
+            "wins":         n_wins,
+            "win_rate":     (n_wins / n_positions * 100) if n_positions else 0.0,
+            "total_pnl":    total_pnl,
+            "return_pct":   (total_pnl / start) * 100,
+            "largest_win":  largest_win,
+            "largest_loss": largest_loss,
+        }
+
+    return {"error": None, "trades": trades, "no_edge_skipped": skipped, "sims": sims}
+
+
+def print_paper_trading(pt: dict) -> None:
+    header("3.  PAPER TRADING P&L  (Quarter Kelly simulation)")
+    if pt.get("error"):
+        print(f"  Error: {pt['error']}")
+        return
+
+    trades  = pt["trades"]
+    skipped = pt["no_edge_skipped"]
+    total   = len(trades) + skipped
+
+    print(f"\n  Resolved markets available:  {total}")
+    print(f"  Positions taken (edge>5%):   {len(trades)}")
+    print(f"  Skipped (no edge):           {skipped}")
+
+    if not trades:
+        print("\n  No trades to simulate yet.")
+        return
+
+    for start, s in pt["sims"].items():
+        pnl_sign = "+" if s["total_pnl"] >= 0 else ""
+        ret_sign = "+" if s["return_pct"] >= 0 else ""
+        print(f"\n  ${start:,.0f} starting capital")
+        row_sep()
+        sub("Positions taken",    str(s["positions"]))
+        sub("Win rate",           f"{s['win_rate']:.1f}%  ({s['wins']}/{s['positions']})")
+        sub("Total P&L",          f"{pnl_sign}${s['total_pnl']:.2f}")
+        sub("Return on capital",  f"{ret_sign}{s['return_pct']:.1f}%")
+        sub("Largest single win", f"${s['largest_win']:.2f}")
+        sub("Largest single loss",f"${s['largest_loss']:.2f}")
+
+
+# ---------------------------------------------------------------------------
+# 4. API connectivity
 # ---------------------------------------------------------------------------
 
 def _ping_clob() -> tuple[bool, str]:
@@ -250,7 +407,7 @@ def check_apis() -> dict:
 
 
 def print_apis(apis: dict) -> None:
-    header("3.  API CONNECTIVITY")
+    header("4.  API CONNECTIVITY")
     print()
     clob_ok, clob_msg     = apis["clob"]
     anthro_ok, anthro_msg = apis["anthropic"]
@@ -282,7 +439,7 @@ def check_latest_signals() -> list[dict]:
 
 
 def print_latest_signals(signals: list[dict]) -> None:
-    header("4.  LATEST SIGNALS  (5 most recent)")
+    header("5.  LATEST SIGNALS  (5 most recent)")
     if not signals:
         print("  No signals found.")
         return
@@ -325,7 +482,7 @@ def check_latest_resolved() -> list[dict]:
 
 
 def print_latest_resolved(resolved: list[dict]) -> None:
-    header("5.  LATEST RESOLVED  (5 most recent)")
+    header("6.  LATEST RESOLVED  (5 most recent)")
     if not resolved:
         print("  No resolved markets yet.")
         return
@@ -431,12 +588,14 @@ def main() -> None:
 
     tasks    = check_tasks()
     db_result= check_db()
+    pt       = check_paper_trading()
     apis     = check_apis()
     signals  = check_latest_signals()
     resolved = check_latest_resolved()
 
     print_tasks(tasks)
     print_db(db_result)
+    print_paper_trading(pt)
     print_apis(apis)
     print_latest_signals(signals)
     print_latest_resolved(resolved)
