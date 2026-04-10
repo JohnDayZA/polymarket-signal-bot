@@ -314,13 +314,19 @@ _COMMODITIES: set[str] = {
     "silver price", "opec", "aramco", "barrel", "kharg", "hormuz",
 }
 
+# 10 — Impossibilities
+_IMPOSSIBILITIES: set[str] = {
+    "jesus", "christ", "alien", "aliens",
+}
+
 
 def _category_from_question(question: str) -> str:
     """
     Classify a market question into a category using whole-word keyword matching.
     Categories are checked in priority order from most specific to most general:
       Crypto/Price > Crypto/Regulation > Crypto >
-      Politics/Election > Politics > Finance > Commodities > Sports > Tech > Other
+      Politics/Election > Politics > Finance > Commodities > Sports > Tech >
+      Impossibilities > Other
     """
     q = question.lower()
 
@@ -348,6 +354,9 @@ def _category_from_question(question: str) -> str:
 
     if _any_kw(_TECH, q):
         return "Tech"
+
+    if _any_kw(_IMPOSSIBILITIES, q):
+        return "Impossibilities"
 
     return "Other"
 
