@@ -136,6 +136,8 @@ def check_db() -> dict:
         "unique_markets": 0,
         "signals_24h": 0,
         "signals_1h": 0,
+        "null_prob_24h": 0,
+        "null_prob_pct": 0.0,
         "resolved_count": 0,
         "accuracy": None,
         "error": None,
@@ -156,6 +158,12 @@ def check_db() -> dict:
         result["signals_1h"]     = conn.execute("SELECT COUNT(*) FROM signals WHERE timestamp >= ?", (cutoff_1h,)).fetchone()[0]
         result["resolved_count"] = conn.execute("SELECT COUNT(DISTINCT market_id) FROM signals WHERE resolved_value IS NOT NULL").fetchone()[0]
 
+        result["null_prob_24h"] = conn.execute(
+            "SELECT COUNT(*) FROM signals WHERE claude_prob IS NULL AND timestamp >= ?", (cutoff_24h,)
+        ).fetchone()[0]
+        if result["signals_24h"] > 0:
+            result["null_prob_pct"] = result["null_prob_24h"] / result["signals_24h"] * 100
+
         acc_row = conn.execute("""
             SELECT
                 SUM(was_claude_correct) AS correct,
@@ -173,6 +181,9 @@ def check_db() -> dict:
     return result
 
 
+NULL_PROB_WARN_THRESHOLD = 10.0   # % of 24h signals with null claude_prob before WARNING
+
+
 def print_db(db: dict) -> None:
     header("2.  DATABASE HEALTH")
     print(f"\n  Path: {DB_PATH}")
@@ -186,6 +197,13 @@ def print_db(db: dict) -> None:
     sub("Unique markets tracked",f"{db['unique_markets']:,}")
     sub("Signals (last 24h)",    str(db["signals_24h"]), ok=(db["signals_24h"] > 0))
     sub("Signals (last 1h)",     str(db["signals_1h"]))
+
+    null_pct = db["null_prob_pct"]
+    null_ok  = null_pct <= NULL_PROB_WARN_THRESHOLD
+    sub("Null claude_prob (24h)",
+        f"{db['null_prob_24h']} ({null_pct:.1f}%)  {'[OK]' if null_ok else '[WARNING — API may be down]'}",
+        ok=null_ok)
+
     sub("Resolved markets",      str(db["resolved_count"]))
     if db["accuracy"] is not None:
         pct = db["accuracy"] * 100
@@ -550,6 +568,13 @@ def compute_status(tasks: list[dict], db_result: dict, apis: dict) -> tuple[str,
         critical = True
     elif db_result["signals_1h"] == 0:
         issues.append("WARNING: No signals written in the last 1 hour")
+        warning = True
+
+    if db_result["null_prob_pct"] > NULL_PROB_WARN_THRESHOLD:
+        issues.append(
+            f"WARNING: {db_result['null_prob_pct']:.1f}% of last-24h signals have null claude_prob"
+            f" ({db_result['null_prob_24h']} rows) — Anthropic API may be down or credits exhausted"
+        )
         warning = True
 
     # APIs
