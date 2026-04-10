@@ -35,6 +35,9 @@ QUESTION_BLOCKLIST = [
     "gta 6",   # alternate phrasing
 ]
 
+# Markets below this YES price are extreme longshots — too little signal value.
+LONGSHOT_FLOOR = 0.03
+
 # Markets priced near 50/50 with low volume are likely abandoned with no real price discovery.
 STALE_PRICE_LO = 0.45
 STALE_PRICE_HI = 0.55
@@ -391,6 +394,9 @@ def fetch_target_markets() -> list[dict]:
 
         if _is_stale_coinflip(m, price):
             stale_coinflip_count += 1
+            continue
+
+        if price is not None and price < LONGSHOT_FLOOR:
             continue
 
         seen_ids.add(cid)
