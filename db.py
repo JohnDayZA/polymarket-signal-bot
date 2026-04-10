@@ -38,7 +38,8 @@ def init_db() -> None:
                 days_to_resolution  REAL,       -- days between signal timestamp and market end date
                 resolved_value      REAL,       -- 1.0 = YES, 0.0 = NO, NULL = unresolved
                 resolved_at         TEXT,       -- UTC ISO timestamp of resolution fetch
-                was_claude_correct  INTEGER     -- 1 = correct, 0 = incorrect, NULL = unresolved
+                was_claude_correct  INTEGER,    -- 1 = correct, 0 = incorrect, NULL = unresolved
+                information_gap     INTEGER     -- 1 = gap>50% at extreme price; Claude likely outdated
             );
 
             CREATE TABLE IF NOT EXISTS run_log (
@@ -57,6 +58,7 @@ def init_db() -> None:
             ("resolved_value",     "REAL"),
             ("resolved_at",        "TEXT"),
             ("was_claude_correct", "INTEGER"),
+            ("information_gap",    "INTEGER"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE signals ADD COLUMN {col} {typedef}")
@@ -74,6 +76,7 @@ def log_signal(
     fear_greed_value: int | None,
     fear_greed_label: str | None,
     days_to_resolution: float | None = None,
+    information_gap: int | None = None,
 ) -> int:
     """Insert one signal row. Returns the new row id."""
     ts = datetime.now(timezone.utc).isoformat()
@@ -83,13 +86,15 @@ def log_signal(
             INSERT INTO signals
               (timestamp, market_id, question, category, market_price,
                claude_prob, confidence, reasoning, vix,
-               fear_greed_value, fear_greed_label, days_to_resolution)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               fear_greed_value, fear_greed_label, days_to_resolution,
+               information_gap)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 ts, market_id, question, category, market_price,
                 claude_prob, confidence, reasoning, vix,
                 fear_greed_value, fear_greed_label, days_to_resolution,
+                information_gap,
             ),
         )
         return cur.lastrowid

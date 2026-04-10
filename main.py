@@ -152,6 +152,20 @@ def run(max_markets: int | None, dry_run: bool) -> None:
                 signal["reasoning"][:120],
             )
 
+        # Detect information gap: claude_prob diverges >50% from market at an
+        # extreme price — almost certainly explained by Claude's training cutoff.
+        claude_prob_val = signal["probability"] if signal else None
+        info_gap: int | None = None
+        if claude_prob_val is not None and price is not None:
+            gap = abs(claude_prob_val - price)
+            extreme = price < 0.15 or price > 0.85
+            if gap > 0.50 and extreme:
+                info_gap = 1
+                logger.info(
+                    "  [INFO_GAP] prob=%.3f market=%.3f gap=%.3f — likely training-cutoff mismatch",
+                    claude_prob_val, price, gap,
+                )
+
         if dry_run:
             logger.info("  [dry-run] Skipping DB write")
         else:
@@ -160,13 +174,14 @@ def run(max_markets: int | None, dry_run: bool) -> None:
                 question=question,
                 category=category,
                 market_price=price,
-                claude_prob=signal["probability"] if signal else None,
+                claude_prob=claude_prob_val,
                 confidence=signal["confidence"] if signal else None,
                 reasoning=signal["reasoning"] if signal else None,
                 vix=snapshot["vix"],
                 fear_greed_value=snapshot["fear_greed_value"],
                 fear_greed_label=snapshot["fear_greed_label"],
                 days_to_resolution=days_to_resolution,
+                information_gap=info_gap,
             )
 
         processed += 1

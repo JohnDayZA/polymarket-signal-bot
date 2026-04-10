@@ -38,6 +38,11 @@ QUESTION_BLOCKLIST = [
 # Markets below this YES price are extreme longshots — too little signal value.
 LONGSHOT_FLOOR = 0.03
 
+# Markets outside this price band are near-resolved — real-time market intelligence
+# dominates and Claude's training data cannot reliably compete.
+MIN_MARKET_PRICE = 0.10
+MAX_MARKET_PRICE = 0.90
+
 # Markets priced near 50/50 with low volume are likely abandoned with no real price discovery.
 STALE_PRICE_LO = 0.45
 STALE_PRICE_HI = 0.55
@@ -361,6 +366,7 @@ def fetch_target_markets() -> list[dict]:
     low_volume_count = 0
     blocklisted_count = 0
     stale_coinflip_count = 0
+    extreme_price_count = 0
 
     raw = _get_gamma_markets()
     for m in raw:
@@ -399,6 +405,10 @@ def fetch_target_markets() -> list[dict]:
         if price is not None and price < LONGSHOT_FLOOR:
             continue
 
+        if price is not None and not (MIN_MARKET_PRICE <= price <= MAX_MARKET_PRICE):
+            extreme_price_count += 1
+            continue
+
         seen_ids.add(cid)
 
         tags_raw = m.get("tags") or []
@@ -420,9 +430,11 @@ def fetch_target_markets() -> list[dict]:
         )
 
     logger.info(
-        "Filtered out: %d expired/imminent (<%dd), %d low-volume (<$%.0f), %d blocklisted, %d stale coin-flips (<$%.0f vol @ 45-55%%)",
+        "Filtered out: %d expired/imminent (<%dd), %d low-volume (<$%.0f), %d blocklisted, "
+        "%d stale coin-flips (<$%.0f vol @ 45-55%%), %d extreme price (outside %.0f-%.0f%%)",
         expired_count, MIN_DAYS_TO_RESOLUTION, low_volume_count, MIN_VOLUME_USDC,
         blocklisted_count, stale_coinflip_count, STALE_MAX_VOLUME,
+        extreme_price_count, MIN_MARKET_PRICE * 100, MAX_MARKET_PRICE * 100,
     )
 
     # If Gamma returned nothing, fall back to CLOB with tag filtering

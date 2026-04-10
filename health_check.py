@@ -34,6 +34,9 @@ REQUEST_TIMEOUT = 10
 
 # Paper trading constants
 MIN_EDGE = 0.05           # minimum claude_prob vs market_price gap to take a position
+MIN_MARKET_PRICE = 0.10   # exclude near-impossible markets — matches polymarket.py
+MAX_MARKET_PRICE = 0.90   # exclude near-certain markets — matches polymarket.py
+MAX_POSITION_PCT = 0.10   # hard cap: no more than 10% of bankroll per trade
 STARTING_CAPITALS = [50.0, 500.0]
 
 # ---------------------------------------------------------------------------
@@ -207,16 +210,19 @@ def check_paper_trading() -> dict:
     """
     Simulate paper trading on all resolved markets.
     Uses the first (earliest) signal row per market for claude_prob and market_price.
-    Applies Quarter Kelly sizing; positions are taken only when edge > MIN_EDGE.
-    Bankroll is updated sequentially in resolved_at order.
+    Filters:
+      - market_price must be within MIN_MARKET_PRICE..MAX_MARKET_PRICE (10-90%)
+      - edge (|claude_prob - market_price|) must exceed MIN_EDGE (5%)
+    Sizing: Quarter Kelly, hard-capped at MAX_POSITION_PCT of current bankroll.
+    Bankroll updated sequentially in resolved_at order.
     """
-    empty = {"error": None, "trades": [], "no_edge_skipped": 0, "sims": {}}
+    empty = {"error": None, "trades": [], "extreme_skipped": 0,
+             "no_edge_skipped": 0, "null_skipped": 0, "sims": {}}
     if not os.path.exists(DB_PATH):
         return {**empty, "error": f"File not found: {DB_PATH}"}
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        # First signal row per market that has been resolved
         rows = conn.execute("""
             SELECT market_id, question, claude_prob, market_price,
                    resolved_value, resolved_at
@@ -230,16 +236,22 @@ def check_paper_trading() -> dict:
         return {**empty, "error": str(exc)}
 
     trades = []
-    skipped = 0
+    null_skipped    = 0
+    extreme_skipped = 0
+    no_edge_skipped = 0
+
     for row in rows:
         cp = row["claude_prob"]
         mp = row["market_price"]
         rv = row["resolved_value"]
+
         if cp is None or mp is None or rv is None:
-            skipped += 1
+            null_skipped += 1
             continue
-        if mp <= 0.0 or mp >= 1.0:
-            skipped += 1
+
+        # Extreme price filter — market is near-resolved; Claude's data can't compete
+        if not (MIN_MARKET_PRICE <= mp <= MAX_MARKET_PRICE):
+            extreme_skipped += 1
             continue
 
         edge = cp - mp
@@ -252,12 +264,12 @@ def check_paper_trading() -> dict:
             win_prob  = 1.0 - cp
             win_price = 1.0 - mp
         else:
-            skipped += 1
+            no_edge_skipped += 1
             continue
 
-        full_k = _kelly_fraction(win_prob, win_price)
+        full_k    = _kelly_fraction(win_prob, win_price)
         quarter_k = full_k / 4.0
-        odds = (1.0 - win_price) / win_price   # net profit multiple on stake
+        odds      = (1.0 - win_price) / win_price
 
         won = (rv == 1.0) if direction == "YES" else (rv == 0.0)
 
@@ -281,8 +293,9 @@ def check_paper_trading() -> dict:
         largest_loss = 0.0
 
         for t in trades:
-            stake = t["quarter_kelly"] * bankroll
-            stake = min(stake, bankroll)
+            # Quarter Kelly, hard-capped at MAX_POSITION_PCT of current bankroll
+            raw_stake = t["quarter_kelly"] * bankroll
+            stake     = min(raw_stake, MAX_POSITION_PCT * bankroll, bankroll)
             if stake < 0.01:
                 continue
 
@@ -309,22 +322,30 @@ def check_paper_trading() -> dict:
             "largest_loss": largest_loss,
         }
 
-    return {"error": None, "trades": trades, "no_edge_skipped": skipped, "sims": sims}
+    return {
+        "error":          None,
+        "trades":         trades,
+        "null_skipped":   null_skipped,
+        "extreme_skipped":extreme_skipped,
+        "no_edge_skipped":no_edge_skipped,
+        "sims":           sims,
+    }
 
 
 def print_paper_trading(pt: dict) -> None:
-    header("3.  PAPER TRADING P&L  (Quarter Kelly simulation)")
+    header("3.  PAPER TRADING P&L  (Quarter Kelly, 10% cap, 10-90% price band)")
     if pt.get("error"):
         print(f"  Error: {pt['error']}")
         return
 
-    trades  = pt["trades"]
-    skipped = pt["no_edge_skipped"]
-    total   = len(trades) + skipped
+    trades   = pt["trades"]
+    total    = len(trades) + pt["extreme_skipped"] + pt["no_edge_skipped"] + pt["null_skipped"]
 
     print(f"\n  Resolved markets available:  {total}")
-    print(f"  Positions taken (edge>5%):   {len(trades)}")
-    print(f"  Skipped (no edge):           {skipped}")
+    print(f"  Skipped (null price/prob):   {pt['null_skipped']}")
+    print(f"  Skipped (extreme price):     {pt['extreme_skipped']}  (outside 10-90%)")
+    print(f"  Skipped (no edge):           {pt['no_edge_skipped']}  (gap <= 5%)")
+    print(f"  Positions taken:             {len(trades)}")
 
     if not trades:
         print("\n  No trades to simulate yet.")
@@ -333,7 +354,7 @@ def print_paper_trading(pt: dict) -> None:
     for start, s in pt["sims"].items():
         pnl_sign = "+" if s["total_pnl"] >= 0 else ""
         ret_sign = "+" if s["return_pct"] >= 0 else ""
-        print(f"\n  ${start:,.0f} starting capital")
+        print(f"\n  ${start:,.0f} starting capital  (max position: ${start * MAX_POSITION_PCT:.0f})")
         row_sep()
         sub("Positions taken",    str(s["positions"]))
         sub("Win rate",           f"{s['win_rate']:.1f}%  ({s['wins']}/{s['positions']})")
