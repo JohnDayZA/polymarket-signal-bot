@@ -182,9 +182,9 @@ def build_workbook(rows: list[dict]) -> openpyxl.Workbook:
         gap_cell = ws.cell(row=row_idx, column=5)
         if gap is not None:
             gap_cell.number_format = "+0.0%;-0.0%;0.0%"
-            if gap > 0.05:
+            if gap > 0.07:
                 gap_cell.fill = PatternFill("solid", fgColor=COL_POSITIVE)
-            elif gap < -0.05:
+            elif gap < -0.07:
                 gap_cell.fill = PatternFill("solid", fgColor=COL_NEGATIVE)
 
         # Percentage format for price columns
@@ -223,8 +223,8 @@ def build_workbook(rows: list[dict]) -> openpyxl.Workbook:
     in_band   = [r for r in rows if r["claude_prob"] is not None]
     resolved  = [r for r in in_band if r["resolved_value"] is not None]
     correct   = [r for r in resolved if r["was_claude_correct"] == 1]
-    bullish   = [r for r in in_band if r["claude_prob"] is not None and r["market_price"] is not None and r["claude_prob"] - r["market_price"] > 0.05]
-    bearish   = [r for r in in_band if r["claude_prob"] is not None and r["market_price"] is not None and r["market_price"] - r["claude_prob"] > 0.05]
+    bullish   = [r for r in in_band if r["claude_prob"] is not None and r["market_price"] is not None and r["claude_prob"] - r["market_price"] > 0.07]
+    bearish   = [r for r in in_band if r["claude_prob"] is not None and r["market_price"] is not None and r["market_price"] - r["claude_prob"] > 0.07]
 
     s_header(1, "Overview")
     s_row(2,  "Export generated",        now_str)

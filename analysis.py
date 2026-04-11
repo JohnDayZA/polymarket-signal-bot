@@ -32,7 +32,7 @@ OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "analysis_re
 MIN_RESOLVED = 20
 MIN_MARKET_PRICE = 0.10
 MAX_MARKET_PRICE = 0.90
-MIN_EDGE = 0.05
+MIN_EDGE = 0.07
 MAX_POSITION_PCT = 0.10
 STARTING_CAPITALS = [50.0, 500.0]
 KELLY_CAP = 0.25         # full Kelly capped at 25% before quartering
@@ -388,7 +388,7 @@ def section_gap_vs_outcome(resolved: list[dict]) -> None:
         out(f"  {label:<{col[0]}}  {len(items):>{col[1]}}  {correct:>{col[2]}}  "
             f"  {pct(accuracy):>{col[3]}}  {pct(avg_gap):>{col[4]}}")
 
-    no_edge = [r for r in in_band if abs(r["claude_prob"] - r["market_price"]) < 0.05]
+    no_edge = [r for r in in_band if abs(r["claude_prob"] - r["market_price"]) < MIN_EDGE]
     sep()
     out(f"  Markets with gap < 5% (no edge, excluded): {len(no_edge)}")
 

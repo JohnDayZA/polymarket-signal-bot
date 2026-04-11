@@ -33,7 +33,7 @@ TASK_NAMES = ["PolymarketSignalBot", "PolymarketResolve"]
 REQUEST_TIMEOUT = 10
 
 # Paper trading constants
-MIN_EDGE = 0.05           # minimum claude_prob vs market_price gap to take a position
+MIN_EDGE = 0.07           # minimum claude_prob vs market_price gap to take a position
 MIN_MARKET_PRICE = 0.10   # exclude near-impossible markets — matches polymarket.py
 MAX_MARKET_PRICE = 0.90   # exclude near-certain markets — matches polymarket.py
 MAX_POSITION_PCT = 0.10   # hard cap: no more than 10% of bankroll per trade
