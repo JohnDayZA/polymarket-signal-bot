@@ -9,6 +9,7 @@ Usage:
 """
 
 import os
+import platform
 import subprocess
 import sqlite3
 import sys
@@ -29,7 +30,10 @@ RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "")
 CLOB_BASE = "https://clob.polymarket.com"
 FEAR_GREED_HOST = "fear-and-greed-index.p.rapidapi.com"
 FEAR_GREED_URL = f"https://{FEAR_GREED_HOST}/v1/fgi"
-TASK_NAMES = ["PolymarketSignalBot", "PolymarketResolve"]
+IS_LINUX = platform.system() == "Linux"
+# Windows Task Scheduler names / Linux systemd timer names
+TASK_NAMES        = ["PolymarketSignalBot", "PolymarketResolve"]
+LINUX_TIMER_NAMES = ["polymarket-signal.timer", "polymarket-resolve.timer"]
 REQUEST_TIMEOUT = 10
 
 # Paper trading constants
@@ -68,8 +72,8 @@ def now_utc() -> datetime:
 # 1. Scheduled tasks
 # ---------------------------------------------------------------------------
 
-def _query_task(task_name: str) -> dict:
-    """Run schtasks and parse key fields for a single task."""
+def _query_task_windows(task_name: str) -> dict:
+    """Query a single Windows Task Scheduler task via schtasks."""
     result = {
         "name": task_name,
         "found": False,
@@ -108,12 +112,80 @@ def _query_task(task_name: str) -> dict:
     return result
 
 
+def _query_task_linux(timer_name: str) -> dict:
+    """Query a single systemd timer and its associated service."""
+    service_name = timer_name.replace(".timer", ".service")
+    result = {
+        "name": timer_name,
+        "found": False,
+        "status": "N/A",
+        "last_run": "N/A",
+        "last_result": "N/A",
+        "next_run": "N/A",
+        "last_result_ok": None,
+    }
+    try:
+        proc = subprocess.run(
+            ["systemctl", "show", timer_name,
+             "--property=ActiveState,NextElapseUSecRealtime,LastTriggerUSec"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return result
+
+        result["found"] = True
+        props = {}
+        for line in proc.stdout.splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                props[k.strip()] = v.strip()
+
+        result["status"] = props.get("ActiveState", "unknown")
+
+        next_usec = props.get("NextElapseUSecRealtime", "0")
+        if next_usec and next_usec != "0":
+            try:
+                dt = datetime.fromtimestamp(int(next_usec) / 1e6, tz=timezone.utc)
+                result["next_run"] = dt.strftime("%Y-%m-%d %H:%M UTC")
+            except (ValueError, OSError):
+                pass
+
+        last_usec = props.get("LastTriggerUSec", "0")
+        if last_usec and last_usec != "0":
+            try:
+                dt = datetime.fromtimestamp(int(last_usec) / 1e6, tz=timezone.utc)
+                result["last_run"] = dt.strftime("%Y-%m-%d %H:%M UTC")
+            except (ValueError, OSError):
+                pass
+
+        svc = subprocess.run(
+            ["systemctl", "show", service_name,
+             "--property=Result,ExecMainStatus"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if svc.returncode == 0:
+            svc_props = {}
+            for line in svc.stdout.splitlines():
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    svc_props[k.strip()] = v.strip()
+            svc_result = svc_props.get("Result", "")
+            result["last_result"] = svc_result if svc_result else "success"
+            result["last_result_ok"] = svc_result in ("success", "")
+
+    except Exception as exc:
+        result["status"] = f"Error: {exc}"
+    return result
+
+
 def check_tasks() -> list[dict]:
-    return [_query_task(name) for name in TASK_NAMES]
+    if IS_LINUX:
+        return [_query_task_linux(name) for name in LINUX_TIMER_NAMES]
+    return [_query_task_windows(name) for name in TASK_NAMES]
 
 
 def print_tasks(tasks: list[dict]) -> None:
-    header("1.  SCHEDULED TASKS")
+    header("1.  SCHEDULED TASKS" if not IS_LINUX else "1.  SYSTEMD TIMERS")
     for t in tasks:
         print(f"\n  Task: {t['name']}")
         row_sep()
